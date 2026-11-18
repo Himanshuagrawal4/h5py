@@ -108,8 +108,10 @@ cdef herr_t dset_rw(hid_t dset, hid_t mtype, hid_t mspace, hid_t fspace,
         if (H5Tget_class(mtype) == H5T_COMPOUND) and (not read):
             rawdstype = H5Dget_type(dset)
             if H5Tget_class(rawdstype) == H5T_COMPOUND:
-                dstype = make_reduced_type(mtype, rawdstype)
-                H5Tclose(rawdstype)
+                try:
+                    dstype = make_reduced_type(mtype, rawdstype)
+                finally:
+                    H5Tclose(rawdstype)
             else:
                 dstype = rawdstype
         else:
@@ -274,19 +276,24 @@ cdef hid_t make_reduced_type(hid_t mtype, hid_t dstype):
     newtype = H5Tcreate(H5T_COMPOUND, newtype_size)
 
     # Second pass: pick out the matching fields and pack them in the new type
-    temptype = H5I_UNINIT
-    for idx in range(H5Tget_nmembers(dstype)):
-        member_name = H5Tget_member_name(dstype, idx)
-        try:
-            if member_name not in mtype_fields:
-                continue
-            temptype = H5Tget_member_type(dstype, idx)
-            H5Tinsert(newtype, member_name, offset, temptype)
-            offset += H5Tget_size(temptype)
-            H5Tclose(temptype)
-        finally:
-            H5free_memory(member_name)
-            member_name = NULL
+    try:
+        for idx in range(H5Tget_nmembers(dstype)):
+            member_name = H5Tget_member_name(dstype, idx)
+            try:
+                if member_name not in mtype_fields:
+                    continue
+                temptype = H5Tget_member_type(dstype, idx)
+                try:
+                    H5Tinsert(newtype, member_name, offset, temptype)
+                    offset += H5Tget_size(temptype)
+                finally:
+                    H5Tclose(temptype)
+            finally:
+                H5free_memory(member_name)
+                member_name = NULL
+    except:
+        H5Tclose(newtype)
+        raise
 
     return newtype
 
