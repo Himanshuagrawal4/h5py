@@ -90,14 +90,15 @@ In addition to the above example snippets, a few more complete examples can be
 found in the examples folder. These examples are described in the following
 sections.
 
-Dataset monitor with inotify
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Dataset monitor with watchdog
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The inotify example demonstrates how to use SWMR in a reading application which
-monitors live progress as a dataset is being written by another process. This
-example uses the the linux inotify
-(`pyinotify <https://pypi.python.org/pypi/pyinotify>`_ python bindings) to
-receive a signal each time the target file has been updated.
+This example uses `watchdog <https://python-watchdog.readthedocs.io/>`_ to monitor
+an append-only dataset in an SWMR file. Install it with ``pip install watchdog``.
+Start the writer and enable SWMR mode before starting the reader. The reader
+refreshes the dataset after file modification notifications and reads rows added
+since the last refresh. Notifications can be coalesced; they do not correspond
+one-to-one to rows or writes. Press Ctrl+C to stop the reader.
 
 .. literalinclude:: ../examples/swmr_inotify_example.py
 

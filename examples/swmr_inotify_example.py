@@ -1,84 +1,59 @@
+"""Monitor an append-only SWMR dataset using watchdog filesystem events."""
 
-"""
-    Demonstrate the use of h5py in SWMR mode to monitor the growth of a dataset
-    on notification of file modifications.
-
-    This demo uses pyinotify as a wrapper of Linux inotify.
-    https://pypi.python.org/pypi/pyinotify
-
-    Usage:
-            swmr_inotify_example.py [FILENAME [DATASETNAME]]
-
-              FILENAME:    name of file to monitor. Default: swmr.h5
-              DATASETNAME: name of dataset to monitor in DATAFILE. Default: data
-
-    This script will open the file in SWMR mode and monitor the shape of the
-    dataset on every write event (from inotify). If another application is
-    concurrently writing data to the file, the writer must have have switched
-    the file into SWMR mode before this script can open the file.
-"""
-import asyncore
-import pyinotify
-import sys
-import h5py
+import argparse
 import logging
+from pathlib import Path
+from threading import Event
 
-#assert h5py.version.hdf5_version_tuple >= (1,9,178), "SWMR requires HDF5 version >= 1.9.178"
+import h5py
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
-class EventHandler(pyinotify.ProcessEvent):
 
-    def monitor_dataset(self, filename, datasetname):
-        logging.info("Opening file %s", filename)
-        self.f = h5py.File(filename, 'r', libver='latest', swmr=True)
-        logging.debug("Looking up dataset %s"%datasetname)
-        self.dset = self.f[datasetname]
+class FileChanges(FileSystemEventHandler):
+    def __init__(self, filename, changed):
+        self.filename = filename
+        self.changed = changed
 
-        self.get_dset_shape()
+    def on_modified(self, event):
+        if not event.is_directory and Path(event.src_path).resolve() == self.filename:
+            self.changed.set()
 
-    def get_dset_shape(self):
-        logging.debug("Refreshing dataset")
-        self.dset.refresh()
 
-        logging.debug("Getting shape")
-        shape = self.dset.shape
-        logging.info("Read data shape: %s"%str(shape))
-        return shape
+def monitor_dataset(filename, dataset_name):
+    filename = Path(filename).resolve()
+    changed = Event()
+    observer = Observer()
+    observer.schedule(FileChanges(filename, changed), str(filename.parent))
 
-    def read_dataset(self, latest):
-        logging.info("Reading out dataset [%d]"%latest)
-        self.dset[latest:]
-
-    def process_IN_MODIFY(self, event):
-        logging.debug("File modified!")
-        shape = self.get_dset_shape()
-        self.read_dataset(shape[0])
-
-    def process_IN_CLOSE_WRITE(self, event):
-        logging.info("File writer closed file")
-        self.get_dset_shape()
-        logging.debug("Good bye!")
-        sys.exit(0)
+    with h5py.File(filename, "r", libver="latest", swmr=True) as file:
+        dataset = file[dataset_name]
+        last_size = 0
+        observer.start()
+        changed.set()
+        try:
+            while observer.is_alive():
+                if not changed.wait(timeout=1):
+                    continue
+                changed.clear()
+                dataset.refresh()
+                size = dataset.shape[0]
+                if size > last_size:
+                    logging.info(
+                        "Read rows %d:%d: %s", last_size, size, dataset[last_size:size]
+                    )
+                    last_size = size
+        except KeyboardInterrupt:
+            pass
+        finally:
+            observer.stop()
+            observer.join()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(format='%(asctime)s  %(levelname)s\t%(message)s',level=logging.INFO)
-
-    file_name = "swmr.h5"
-    if len(sys.argv) > 1:
-        file_name = sys.argv[1]
-    dataset_name = "data"
-    if len(sys.argv) > 2:
-        dataset_name = sys.argv[2]
-
-
-    wm = pyinotify.WatchManager()  # Watch Manager
-    mask = pyinotify.IN_MODIFY | pyinotify.IN_CLOSE_WRITE
-    evh = EventHandler()
-    evh.monitor_dataset( file_name, dataset_name )
-
-    notifier = pyinotify.AsyncNotifier(wm, evh)
-    wdd = wm.add_watch(file_name, mask, rec=False)
-
-    # Sit in this loop() until the file writer closes the file
-    # or the user hits ctrl-c
-    asyncore.loop()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("filename", nargs="?", default="swmr.h5")
+    parser.add_argument("dataset", nargs="?", default="data")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    monitor_dataset(args.filename, args.dataset)
